@@ -6,13 +6,24 @@
 //
 
 import SwiftUI
+import Supabase
 
 //chore on list
-struct Chore: Identifiable {
-    let id = UUID()
+struct Chore: Codable, Identifiable {
+    let id: Int
     var title: String
     var assignee: String
-    var isDone = false
+    var isDone: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, assignee
+        case isDone = "is_done"
+    }
+}
+
+struct NewChore: Encodable {
+    let title: String
+    let assignee: String
 }
 
 struct ContentView: View {
@@ -22,6 +33,7 @@ struct ContentView: View {
     @State private var chores: [Chore] = []
     @State private var newTitle = ""
     @State private var newAssignee = "alex"
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -31,14 +43,19 @@ struct ContentView: View {
                     Picker("assign chore to", selection: $newAssignee) {
                         ForEach(roommates, id: \.self) {Text($0)}
                     }
-                    Button("add chore") { addChore() }
+                    Button("add chore") {
+                        Task { await addChore() }
+                    }
                         .disabled(newTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                if let errorMessage {
+                    Section { Text(errorMessage).foregroundStyle(.red) }
                 }
                 
                 Section("chores") {
-                    ForEach($chores) { $chore in
+                    ForEach(chores) { chore in
                         Button {
-                            chore.isDone.toggle()
+                            Task { await toggle(chore) }
                         } label: {
                             HStack{
                                 Image(systemName: chore.isDone ? "checkmark.circle.fill" : "circle")
@@ -55,10 +72,47 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("choreboard")
+            .task { await loadChores() }
+            .refreshable { await loadChores() }
         }
     }
-    func addChore() {
-        chores.append(Chore(title: newTitle, assignee: newAssignee))
-        newTitle = ""
+    func loadChores() async {
+        do {
+            chores = try await supabase
+                .from("chores")
+                .select()
+                .order("id")
+                .execute()
+                .value
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func addChore() async {
+        do {
+            try await supabase
+                .from("chores")
+                .insert(NewChore(title: newTitle, assignee: newAssignee))
+                .execute()
+            newTitle = ""
+            await loadChores()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func toggle(_ chore: Chore) async {
+        do {
+            try await supabase
+                .from("chores")
+                .update(["is_done": !chore.isDone])
+                .eq("id", value: chore.id)
+                .execute()
+            await loadChores()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
